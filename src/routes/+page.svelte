@@ -2,17 +2,25 @@
   import { invoke } from "@tauri-apps/api/core";
   import { save } from "@tauri-apps/plugin-dialog";
 
-  let name = $state("");
-  let greetMsg = $state("");
+  let profile = "Broken PETG HF";
 
-  async function saveHello() {
+  async function exportProfile() {
+    // build JSON string (if you want to preview)
+    // const json = await invoke<string>("build_filament_profile", { start: profile });
+
+    // or write directly
     const path = await save({
-      defaultPath: "hello.txt",
-      title: "Save text file",
+      defaultPath: `${profile} profile.json`,
+      title: "Export filament profile",
     });
-    if (!path) return; // user cancelled
-    await invoke("save_text", { path, contents: "hello from tauri" });
+    if (!path) return;
+
+    await invoke<string>("export_filament_profile", {
+      start: profile,
+      outputPath: path,
+    });
   }
 </script>
 
-<button on:click={saveHello}>Save a file…</button>
+<input bind:value={profile} placeholder="Profile name (e.g., Broken PETG HF)" />
+<button on:click={exportProfile}>Export profile…</button>
