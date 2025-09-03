@@ -26,16 +26,8 @@ fn user_filament_dirs() -> Vec<PathBuf> {
     out
 }
 
-fn system_filament_dir() -> PathBuf {
-    orca_root().join("system/OrcaFilamentLibrary/filament")
-}
-
-fn system_filament_base_dir() -> PathBuf {
-    system_filament_dir().join("base")
-}
-
 fn try_file(dir: &Path, name: &str) -> Option<PathBuf> {
-    dbg!("trying for file {} in path {}", &name, &dir);
+    println!("trying for file {} in path {:?}", &name, &dir);
     let fname = if name.ends_with(".json") {
         name.to_string()
     } else {
@@ -45,21 +37,45 @@ fn try_file(dir: &Path, name: &str) -> Option<PathBuf> {
     cand.is_file().then_some(cand)
 }
 
-/// Search order: user/*/filament → system/filament → system/filament/base
+/// Recursively search under `dir` for `<name>.json`
+fn search_recursive(dir: &Path, name: &str) -> Option<PathBuf> {
+    let fname = if name.ends_with(".json") {
+        name.to_string()
+    } else {
+        format!("{name}.json")
+    };
+
+    // Fast check in current dir
+    let cand = dir.join(&fname);
+    if cand.is_file() {
+        return Some(cand);
+    }
+
+    // Walk subdirectories
+    if let Ok(entries) = fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Some(found) = search_recursive(&p, name) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn find_profile_file(name: &str) -> Option<PathBuf> {
-    dbg!("fiding profile {}", &name);
+    // check user profiles first
     for d in user_filament_dirs() {
         if let Some(p) = try_file(&d, name) {
             return Some(p);
         }
     }
-    if let Some(p) = try_file(&system_filament_dir(), name) {
-        return Some(p);
-    }
-    if let Some(p) = try_file(&system_filament_base_dir(), name) {
-        return Some(p);
-    }
-    None
+
+    // search whole system tree
+    let sys_root = orca_root().join("system");
+    search_recursive(&sys_root, name)
 }
 
 fn load_json(path: &Path) -> Result<Value, String> {
@@ -82,14 +98,14 @@ fn deep_merge(into: &mut serde_json::Value, from: &serde_json::Value) {
 
 /// Returns bottom→top chain
 fn resolve_chain(start_name: &str) -> Result<Vec<(String, Value)>, String> {
-    dbg!("resolving chain for {}", &start_name);
+    println!("resolving chain for {}", &start_name);
     let mut chain = Vec::new();
     let mut seen = HashSet::new();
     let mut cursor = start_name.to_string();
-    dbg!("starting cursor {}", &cursor);
+    // println!("starting cursor {}", &cursor);
 
     loop {
-        dbg!("looping cursor {}", &cursor);
+        // println!("looping cursor {}", &cursor);
         if !seen.insert(cursor.clone()) {
             return Err(format!("cycle detected at '{}'", cursor));
         }
@@ -104,6 +120,7 @@ fn resolve_chain(start_name: &str) -> Result<Vec<(String, Value)>, String> {
         chain.push((chain_name.clone(), obj.clone()));
         if let Some(inh) = obj.get("inherits").and_then(Value::as_str) {
             cursor = inh.to_string();
+            println!("found achestor {}", &cursor);
         } else {
             break;
         }
@@ -141,7 +158,7 @@ fn greet(name: &str) -> String {
 
 #[tauri::command]
 fn build_filament_profile(start: String) -> Result<String, String> {
-    dbg!("building profile {}", &start);
+    println!("building profile {}", &start);
     let chain = resolve_chain(&start)?;
     let final_name = chain
         .last()
@@ -153,11 +170,36 @@ fn build_filament_profile(start: String) -> Result<String, String> {
 
 #[tauri::command]
 fn export_filament_profile(start: String, output_path: String) -> Result<String, String> {
-    dbg!("exporting filament profile {}", &start);
+    println!("exporting filament profile {}", &start);
     let s = build_filament_profile(start)?;
     fs::write(&output_path, s.as_bytes())
         .map_err(|e| format!("write {}: {}", output_path, e))?;
     Ok(output_path)
+}
+
+#[tauri::command]
+fn list_user_filament_profiles() -> Result<Vec<String>, String> {
+    use std::collections::BTreeSet;
+    let mut names: BTreeSet<String> = BTreeSet::new();
+
+    for d in user_filament_dirs() {
+        let Ok(read) = std::fs::read_dir(&d) else { continue };
+        for e in read.flatten() {
+            let p = e.path();
+            if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
+                // Prefer the "name" field; fallback to filename (without .json)
+                let name = load_json(&p)
+                    .ok()
+                    .and_then(|v| v.get("name").and_then(|s| s.as_str()).map(|s| s.to_string()))
+                    .or_else(|| p.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()));
+
+                if let Some(n) = name {
+                    names.insert(n);
+                }
+            }
+        }
+    }
+    Ok(names.into_iter().collect())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -168,7 +210,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             build_filament_profile,
-            export_filament_profile
+            export_filament_profile,
+            list_user_filament_profiles
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

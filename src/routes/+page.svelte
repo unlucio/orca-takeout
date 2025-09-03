@@ -1,26 +1,44 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { save } from "@tauri-apps/plugin-dialog";
 
-  let profile = "Broken PETG HF";
+  let profiles: string[] = [];
+  let selected = "";
+
+  async function loadProfiles() {
+    profiles = await invoke<string[]>("list_user_filament_profiles");
+    if (profiles.length && !profiles.includes(selected)) selected = profiles[0];
+  }
+
+  onMount(loadProfiles);
 
   async function exportProfile() {
-    // build JSON string (if you want to preview)
-    // const json = await invoke<string>("build_filament_profile", { start: profile });
-
-    // or write directly
+    if (!selected) return;
     const path = await save({
-      defaultPath: `${profile} profile.json`,
+      defaultPath: `${selected} profile.json`,
       title: "Export filament profile",
     });
     if (!path) return;
 
-    await invoke<string>("export_filament_profile", {
-      start: profile,
+    await invoke("export_filament_profile", {
+      start: selected,
       outputPath: path,
     });
   }
 </script>
 
-<input bind:value={profile} placeholder="Profile name (e.g., Broken PETG HF)" />
-<button on:click={exportProfile}>Export profile…</button>
+<div style="display:flex; gap:0.5rem; align-items:center;">
+  <select bind:value={selected}>
+    {#if profiles.length === 0}
+      <option disabled selected>— no user profiles found —</option>
+    {:else}
+      {#each profiles as p}
+        <option value={p}>{p}</option>
+      {/each}
+    {/if}
+  </select>
+
+  <button on:click={loadProfiles} title="Refresh">↻</button>
+  <button on:click={exportProfile} disabled={!selected}>Export…</button>
+</div>
